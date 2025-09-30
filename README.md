@@ -7,6 +7,13 @@ Este frontend consome a API do MFO Planner e oferece módulos de **Simulações*
 
 ---
 
+## Qualidade do Código
+
+- [Relatório SonarCloud - Backend](https://sonarcloud.io/project/overview?id=cilasmiguel-git_projeto_multi_family_office_backend)  
+- [Relatório SonarCloud - Frontend](https://sonarcloud.io/project/overview?id=cilasmiguel-git_projeto_multi_family_office_frontend)
+
+---
+
 ## ✨ Principais funcionalidades
 
 - **Visão Geral do Cliente (Dashboard)**
