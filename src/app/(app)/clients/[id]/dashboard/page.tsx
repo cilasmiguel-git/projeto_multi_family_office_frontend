@@ -1,8 +1,7 @@
 // src/app/(app)/clients/[id]/dashboard/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 import { useClient } from "@/hooks/useClients";
@@ -10,51 +9,120 @@ import {
   useSimulationsOfClient,
   useSimulationVersions,
 } from "@/hooks/useSimulations";
-import { useRunProjection, ProjectionResponse } from "@/hooks/useProjections"; // você já tem esse hook
-import AllocationsTimeline from "@/components/AllocationsTimeline";
+import { useRunProjection, ProjectionResponse } from "@/hooks/useProjections";
+import AllocationsTimelinePro from "@/components/AllocationsTimelinePro";
 import HistoryList, { HistoryItem } from "@/components/HistoryList";
 import ClientPicker from "@/components/ClientPicker";
 import { useRouter, useParams } from "next/navigation";
+import { useAllocationsOfVersion } from "@/hooks/useAllocations";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Line,
+  Legend,
+} from "recharts";
+import { useQueries } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { routes } from "@/lib/routes";
+import DiscoveryPanel from "@/components/DiscoveryPanel";
 
 export default function ClientDashboardPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const clientId = params?.id;
+  const currentYear = new Date().getFullYear();
 
-  // 1) Buscar cliente + simulações dele
+  // 1) Cliente + simulações
   const { data: client } = useClient(clientId);
   const { data: sims } = useSimulationsOfClient(clientId);
 
-  // escolhe a simulação principal (a mais recente)
+  // simulação principal (a mais recente)
   const activeSim = useMemo(() => sims?.[0] ?? null, [sims]);
 
-  // 2) Buscar versões da simulação
-  const { data: versions } = useSimulationVersions(activeSim?.id);
+  // 2) Versões da simulação
+  const { data: versions } = useSimulationVersions(
+    activeSim?.simulationId ?? null
+  );
 
-  // escolhe versão corrente (isCurrentSnapshot) ou maior número
+  // Estados controlados
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
+    null
+  );
+  const [lifeStatus, setLifeStatus] = useState<"ALIVE" | "DEAD" | "INVALID">(
+    "ALIVE"
+  );
+
+  // versão corrente — respeita a seleção do usuário
   const currentVersion = useMemo(() => {
     if (!versions || versions.length === 0) return null;
+    if (selectedVersionId) {
+      return versions.find((v) => v.id === selectedVersionId) ?? null;
+    }
     const snap = versions.find((v) => v.isCurrentSnapshot);
     return snap ?? versions.reduce((a, b) => (a.version > b.version ? a : b));
-  }, [versions]);
+  }, [versions, selectedVersionId]);
 
-  // 3) Rodar projeção em tempo real
+  // Sincroniza lifeStatus ao trocar de versão
+  useEffect(() => {
+    if (currentVersion?.lifeStatus) {
+      setLifeStatus(currentVersion.lifeStatus as "ALIVE" | "DEAD" | "INVALID");
+    }
+  }, [currentVersion?.id]);
+
+  // 3) Projeção (auto-run + manual)
   const run = useRunProjection();
   const [projection, setProjection] = useState<ProjectionResponse | null>(null);
+  const lastRunKeyRef = useRef<string | null>(null);
 
+  // Auto-rodar quando simulação/versão/vida mudarem
+  useEffect(() => {
+    if (!activeSim || run.isPending) return;
+
+    const baseRateReal =
+      typeof activeSim.baseRateReal === "number"
+        ? activeSim.baseRateReal
+        : 0.04;
+
+    const key = `${activeSim.simulationId}|${
+      currentVersion?.id ?? "nover"
+    }|${lifeStatus}|${baseRateReal}`;
+    if (lastRunKeyRef.current === key) return; // já rodou para esse estado
+
+    lastRunKeyRef.current = key;
+    run.mutate(
+      {
+        simulationId: activeSim.simulationId,
+        lifeStatus,
+        baseRateReal,
+      },
+      { onSuccess: (res) => setProjection(res) }
+    );
+  }, [activeSim?.simulationId, currentVersion?.id, lifeStatus]); // deps importantes
+
+  // Botão para reprocessar manualmente
   const onRunProjection = async () => {
     if (!activeSim) return;
-    const lifeStatus = "ALIVE" as const; // você pode ler do select
-    const baseRateReal = 0.04; // idem
+    const baseRateReal =
+      typeof activeSim.baseRateReal === "number"
+        ? activeSim.baseRateReal
+        : 0.04;
     const res = await run.mutateAsync({
-      simulationId: activeSim.id,
+      simulationId: activeSim.simulationId,
       lifeStatus,
       baseRateReal,
     });
     setProjection(res);
+    lastRunKeyRef.current = `${activeSim.simulationId}|${
+      currentVersion?.id ?? "nover"
+    }|${lifeStatus}|${baseRateReal}`;
   };
 
-  // 4) Derivar KPIs / net worth / milestones da projeção
+  // 4) KPIs / net worth / milestones
   const { netWorth, deltaPct, kpis, milestones } = useMemo(() => {
     const empty = {
       netWorth: 0,
@@ -88,12 +156,13 @@ export default function ClientDashboardPage() {
       new Date().getFullYear() + 10,
       new Date().getFullYear() + 20,
     ];
+
     const milestones = wantYears.map((y, idx) => {
       const near = nearestByYear(pts, y);
       return {
         year: y,
         caption: idx === 0 ? "Hoje" : "",
-        age: estimateAgeFromVersion(currentVersion, y), // se não tiver idade real, pode mockar 45/55/65
+        age: estimateAgeFromVersion(currentVersion, y, client, currentYear),
         value: near?.totalAssets ?? 0,
         deltaPct: first.totalAssets
           ? (((near?.totalAssets ?? 0) - first.totalAssets) /
@@ -118,7 +187,6 @@ export default function ClientDashboardPage() {
   // 5) Histórico (a partir das versões)
   const historyItems: HistoryItem[] = useMemo(() => {
     if (!versions) return [];
-    // ordena desc por versão
     const sorted = [...versions].sort((a, b) => b.version - a.version);
     return sorted.map((v) => ({
       id: v.id,
@@ -130,68 +198,205 @@ export default function ClientDashboardPage() {
         : v.version === (currentVersion?.version ?? 0)
         ? "whatif"
         : "original",
-      retirementAge: undefined, // preencha se tiver essa info
+      retirementAge: undefined,
     }));
   }, [versions, currentVersion]);
 
+  // ------ Dados do gráfico (sempre a partir de "projection") ------
+  const normalizedPoints = useMemo(
+    () =>
+      (projection?.points ?? []).map((p) => ({
+        year: Number(p.year),
+        financialAssets: Number(p.financialAssets) || 0,
+        realEstateAssets: Number(p.realEstateAssets) || 0,
+        totalAssets: Number(p.totalAssets) || 0,
+        totalWithoutInsurances: Number(p.totalWithoutInsurances) || 0,
+      })),
+    [projection?.points]
+  );
+
+  const points = normalizedPoints;
+  const hasData = (points?.length ?? 0) > 0;
+
+  // Alocações da versão atualmente selecionada
+  const { data: allocations = [] } = useAllocationsOfVersion(
+    currentVersion?.id ?? null
+  );
+
+  // Históricos das alocações
+  const histories = useQueries({
+    queries: allocations.map((a) => ({
+      queryKey: ["alloc-history", a.id],
+      queryFn: async () => {
+        const { data } = await api.get(routes.allocations.recordsOf(a.id));
+        return (data ?? [])
+          .map((r: any) => ({ ...r, value: Number(r.value) }))
+          .sort((a: any, b: any) => +new Date(a.date) - +new Date(b.date));
+      },
+      enabled: !!allocations.length,
+      staleTime: 10_000,
+    })),
+  });
+
+  // Transformar records em pontos da timeline
+  const { timelinePoints, timelineFrom, timelineTo } = useMemo(() => {
+    let minY = currentYear;
+    let maxY = currentYear + 10;
+
+    const pts: {
+      id: string;
+      year: number;
+      label: string;
+      value: number;
+      type?: "FINANCIAL" | "REAL_ESTATE";
+    }[] = [];
+
+    allocations.forEach((a, idx) => {
+      const recs = histories[idx]?.data ?? [];
+
+      if (recs.length === 0) {
+        const y = new Date(a.createdAt).getFullYear();
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y + 1);
+        pts.push({
+          id: `${a.id}-init`,
+          year: y,
+          label: a.name,
+          value: 0,
+          type: a.type,
+        });
+        return;
+      }
+
+      for (const r of recs) {
+        const y = new Date(r.date).getFullYear();
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y + 1);
+
+        pts.push({
+          id: `${a.id}-${r.id}`,
+          year: y,
+          label: a.name,
+          value: Number(r.value) || 0,
+          type: a.type,
+        });
+      }
+    });
+
+    if (pts.length === 0) {
+      minY = currentYear;
+      maxY = currentYear + 20;
+    } else {
+      minY = Math.min(minY, currentYear);
+      maxY = Math.max(maxY, currentYear + 5);
+    }
+
+    return {
+      timelinePoints: pts,
+      timelineFrom: minY,
+      timelineTo: maxY,
+    };
+  }, [allocations, histories, currentYear]);
+
+  function triggerProjection(nextLife?: "ALIVE" | "DEAD" | "INVALID") {
+    if (!activeSim) return;
+
+    const baseRateReal =
+      typeof activeSim.baseRateReal === "number"
+        ? activeSim.baseRateReal
+        : 0.04;
+
+    const ls = nextLife ?? lifeStatus;
+    const key = `${activeSim.simulationId}|${
+      currentVersion?.id ?? "nover"
+    }|${ls}|${baseRateReal}`;
+    if (lastRunKeyRef.current === key) return;
+
+    lastRunKeyRef.current = key;
+    run.mutate(
+      { simulationId: activeSim.simulationId, lifeStatus: ls, baseRateReal },
+      { onSuccess: (res) => setProjection(res) }
+    );
+  }
+
   return (
     <div className="space-y-6">
-      {/* Header tipo mock com cliente + net worth + milestones */}
+      {/* Header */}
       <ClientSummaryHeader
         clientName={client?.name ?? "—"}
         netWorth={netWorth}
         deltaPct={deltaPct}
         milestones={milestones}
         onSelectClient={(id) => {
-          // <- passa a navegação por prop
           router.push(`/clients/${id}/dashboard`);
           localStorage.setItem("activeClientId", id);
         }}
       />
 
-      {/* Controles do cenário */}
-      <div className="card p-4 flex items-center gap-3">
-        <input
-          className="input-ghost w-[320px]"
-          placeholder="Nome do cenário"
-          value={currentVersion ? `Projeção ${currentVersion.version}` : ""}
-          readOnly
-        />
-        {/* Status (Vivo/Falecido) */}
-        <select
-          className="h-9 px-3 rounded-lg bg-[rgb(var(--panel-2))] border border-[rgb(var(--stroke))]/40 text-[rgb(var(--text))] focus:outline-none focus:ring-2 focus:ring-[rgb(var(--primary))]/40 w-[140px]"
-          defaultValue="Vivo"
+      <div className=" p-4 flex items-center gap-0 flex justify-center ">
+        <fieldset
+          className="flex items-center gap-5"
+          role="radiogroup"
+          aria-label="Situação de vida"
         >
-          <option value="Vivo">Vivo</option>
-          <option value="Falecido">Falecido</option>
-        </select>
+          <label className="flex items-center gap-2 cursor-pointer group">
+            <input
+              type="radio"
+              name="lifeStatus"
+              value="ALIVE"
+              checked={lifeStatus === "ALIVE"}
+              onChange={() => {
+                setLifeStatus("ALIVE");
+                triggerProjection("ALIVE");
+              }}
+              className="sr-only peer"
+            />
+            <span
+              className="
+        w-3.5 h-3.5 rounded-full
+        border border-[rgb(var(--stroke))]/50
+        bg-[rgb(var(--panel-2))]
+        peer-checked:bg-emerald-400
+        peer-checked:ring-2 peer-checked:ring-emerald-400/40
+        peer-focus-visible:ring-2 peer-focus-visible:ring-[rgb(var(--primary))]/50
+        transition
+      "
+              aria-hidden
+            />
+            <span className="text-sm text-[rgb(var(--text))]">Vivo</span>
+          </label>
 
-        {/* Versão (apenas leitura) */}
-        <select
-          className="h-9 px-3 rounded-lg bg-[rgb(var(--panel-2))] border border-[rgb(var(--stroke))]/40 text-[rgb(var(--text))] focus:outline-none w-[100px]"
-          value={currentVersion?.version ?? ""}
-          disabled // readOnly não funciona em <select>
-        >
-          {(versions ?? []).map((v) => (
-            <option key={v.id} value={v.version}>
-              {v.version}
-            </option>
-          ))}
-        </select>
-
-        <button
-          className={cn(
-            "btn btn-primary ml-auto",
-            run.isPending && "opacity-70 cursor-wait"
-          )}
-          onClick={onRunProjection}
-          disabled={!activeSim || run.isPending}
-        >
-          {run.isPending ? "Rodando..." : "Rodar projeção"}
-        </button>
+          {/* Falecido */}
+          <label className="flex items-center gap-2 cursor-pointer group">
+            <input
+              type="radio"
+              name="lifeStatus"
+              value="DEAD"
+              checked={lifeStatus === "DEAD"}
+              onChange={() => {
+                setLifeStatus("DEAD");
+                triggerProjection("DEAD");
+              }}
+              className="sr-only peer"
+            />
+            <span
+              className="
+        w-3.5 h-3.5 rounded-full
+        border border-[rgb(var(--stroke))]/50
+        bg-[rgb(var(--panel-2))]
+        peer-checked:bg-rose-400
+        peer-checked:ring-2 peer-checked:ring-rose-400/40
+        peer-focus-visible:ring-2 peer-focus-visible:ring-[rgb(var(--primary))]/50
+        transition
+      "
+              aria-hidden
+            />
+            <span className="text-sm text-[rgb(var(--text))]">Morto</span>
+          </label>
+        </fieldset>
       </div>
 
-      {/* KPIs + placeholder do gráfico (substitua pelo seu chart) */}
+      {/* KPIs + Gráfico */}
       <div className="card p-4 space-y-4">
         <div className="grid grid-cols-3 gap-3">
           <Kpi
@@ -205,53 +410,88 @@ export default function ClientDashboardPage() {
           />
         </div>
 
-        <div className="rounded-xl border border-[rgb(var(--stroke))]/40 bg-[rgb(var(--panel-2))] p-3">
-          <div className="h-[260px] rounded-lg border border-dashed border-[rgb(var(--stroke))]/40 flex items-center justify-center text-[rgb(var(--muted))]">
-            {projection
-              ? "Gráfico com dados da projeção"
-              : "Rodar projeção para ver o gráfico"}
-          </div>
-
-          <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-4">
-              <LegendPill
-                label="Financeiro"
-                color="linear-gradient(135deg,#60a5fa,#8b5cf6)"
-              />
-              <LegendPill
-                label="Imobilizado"
-                color="linear-gradient(135deg,#22d3ee,#34d399)"
-              />
-              <LegendPill
-                label="Total s/ Seguros"
-                color="linear-gradient(135deg,#d1d5db,#6b7280)"
-              />
+        <div className="h-[400px] rounded-lg border border-dashed border-[rgb(var(--stroke))]/40 p-2 flex justify center">
+          {!projection ? (
+            <div className="h-full w-full flex items-center justify-center text-[rgb(var(--muted))]">
+              Rodando projeção…
             </div>
-            <div className="flex items-center gap-2">
-              <button className="btn h-8">Plano Original</button>
-              <button className="btn h-8">Situação Atual</button>
-              <button className="btn h-8">Editar</button>
-              <button className="btn btn-primary h-8">Salvar Versão</button>
+          ) : !hasData ? (
+            <div className="h-full w-full flex items-center justify-center text-[rgb(var(--muted))]">
+              Sem dados para projetar. Verifique alocações, movimentos e
+              seguros.
             </div>
-          </div>
+          ) : (
+            <ResponsiveContainer width="95%" height="100%">
+              <AreaChart data={points}>
+                <CartesianGrid stroke="rgba(255,255,255,0.06)" />
+                <XAxis dataKey="year" stroke="rgba(255,255,255,0.6)" />
+                <YAxis
+                  domain={[
+                    (dataMin: number) =>
+                      Number.isFinite(dataMin) ? Math.min(0, dataMin) : 0,
+                    (dataMax: number) =>
+                      Number.isFinite(dataMax) ? Math.max(1, dataMax) : 1,
+                  ]}
+                  stroke="rgba(255,255,255,0.6)"
+                />
+                <Tooltip />
+                <Legend />
+                <Area
+                  type="monotone"
+                  dataKey="financialAssets"
+                  name="Financeiro"
+                  stackId="1"
+                  stroke="#38bdf8"
+                  fill="rgba(56,189,248,.25)"
+                />
+                <Area
+                  type="monotone"
+                  dataKey="realEstateAssets"
+                  name="Imobilizado"
+                  stackId="1"
+                  stroke="#f59e0b"
+                  fill="rgba(245,158,11,.25)"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="totalWithoutInsurances"
+                  name="Total s/ Seguros"
+                  dot={false}
+                  stroke="#a78bfa"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
       {/* Timeline + Histórico */}
-      <div className="card p-4">
+      <div className="h-100 card p-4">
         <div className="mb-3 flex items-center justify-between">
           <span className="text-sm text-[rgb(var(--muted))]">
             Timeline de alocações manuais
           </span>
           <button className="btn h-8">+ Adicionar</button>
         </div>
-        <AllocationsTimeline data={[]} />
+        <AllocationsTimelinePro
+          points={timelinePoints}
+          startYear={timelineFrom}
+          endYear={timelineTo}
+          baseAge={estimateAgeFromVersion(
+            currentVersion,
+            timelineFrom,
+            client,
+            currentYear
+          )}
+          majorStep={5}
+        />
       </div>
-
-      <HistoryList
-        items={historyItems}
-        onOpen={(id) => console.log("abrir", id)}
-      />
+      <div className="card p-4">
+        <DiscoveryPanel
+          clientId={clientId!}
+          versionId={currentVersion?.id ?? null}
+        />
+      </div>
     </div>
   );
 }
@@ -267,9 +507,47 @@ function nearestByYear(points: ProjectionResponse["points"], year: number) {
   );
 }
 
-function estimateAgeFromVersion(_version: any, _year: number) {
-  // se tiver a "idade inicial" na versão, calcule direito; por enquanto, placeholder:
-  return 45; // ajuste quando tiver os dados corretos
+// Calcula idade no final do "year" usando várias fontes.
+// Ajuste os nomes dos campos conforme seu backend (birthDate/dateOfBirth/dob, baseAge/baseYear etc).
+function estimateAgeFromVersion(
+  version: any,
+  year: number,
+  client?: any,
+  currentYear: number = new Date().getFullYear()
+) {
+  // 1) Data de nascimento do cliente (preferível)
+  const birthStr =
+    client?.birthDate ?? client?.dateOfBirth ?? client?.dob ?? null;
+  if (birthStr) {
+    const d = new Date(birthStr);
+    if (!isNaN(d.getTime())) {
+      const birthYear = d.getFullYear();
+      // Considerando idade "no fim do ano" → diferença simples de ano
+      return Math.max(0, year - birthYear);
+    }
+  }
+
+  // 2) Idade base na versão (ex.: versão tem referência de idade/ano)
+  if (
+    typeof version?.baseAge === "number" &&
+    typeof version?.baseYear === "number"
+  ) {
+    return Math.max(0, Math.round(version.baseAge + (year - version.baseYear)));
+  }
+
+  // 3) Idade atual do cliente + deslocamento de anos
+  const ageNow =
+    typeof client?.age === "number"
+      ? client.age
+      : typeof client?.currentAge === "number"
+      ? client.currentAge
+      : null;
+  if (typeof ageNow === "number") {
+    return Math.max(0, Math.round(ageNow + (year - currentYear)));
+  }
+
+  // 4) Fallback
+  return 45;
 }
 
 function Kpi({ title, value }: { title: string; value: string }) {
@@ -281,16 +559,8 @@ function Kpi({ title, value }: { title: string; value: string }) {
   );
 }
 
-function LegendPill({ label, color }: { label: string; color: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span
-        className="inline-block w-5 h-5 rounded-full border border-white/10"
-        style={{ background: color }}
-      />
-      <span className="text-sm text-[rgb(var(--muted))]">{label}</span>
-    </div>
-  );
+function formatCurrency(n: number) {
+  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 function ClientSummaryHeader({
@@ -298,7 +568,7 @@ function ClientSummaryHeader({
   netWorth,
   deltaPct,
   milestones,
-  onSelectClient, // <- nova prop
+  onSelectClient,
 }: {
   clientName: string;
   netWorth: number;
@@ -310,7 +580,7 @@ function ClientSummaryHeader({
     value: number;
     deltaPct?: number;
   }[];
-  onSelectClient: (id: string) => void; // <- tipagem
+  onSelectClient: (id: string) => void;
 }) {
   const deltaPositive = deltaPct >= 0;
   return (
@@ -319,9 +589,8 @@ function ClientSummaryHeader({
         <div className="space-y-3">
           <ClientPicker
             currentClientName={clientName}
-            onSelect={onSelectClient} // <- usa a prop (sem router aqui)
+            onSelect={onSelectClient}
           />
-
           <div>
             <div className="text-xs text-[rgb(var(--muted))] mb-1">
               Patrimônio Líquido Total
@@ -382,8 +651,4 @@ function ClientSummaryHeader({
       </div>
     </div>
   );
-}
-
-function formatCurrency(n: number) {
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }

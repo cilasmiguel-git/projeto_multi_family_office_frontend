@@ -16,4 +16,5 @@ export const qk = {
     ["simulations", "by-client", clientId] as const,
   simulationVersions: (simulationId: string) =>
     ["simulation-versions", simulationId] as const,
+  custom: <T extends readonly unknown[]>(...key: T) => key,
 };

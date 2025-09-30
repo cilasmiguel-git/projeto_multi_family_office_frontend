@@ -11,6 +11,8 @@ export default function ClientProjectionPage() {
   // opcional: só pra exibir o nome atual no cabeçalho do combo
   const { data: client } = useClient(clientId || undefined);
 
+  console.log("na pagina",clientId)
+
   return (
     <ProjectionView
       presetClient={client ? { id: client.id, name: client.name } : null}

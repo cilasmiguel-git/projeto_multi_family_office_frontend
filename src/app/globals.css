@@ -3,31 +3,28 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Dark default */
+:root { color-scheme: dark; }
 
-/* Dark-mode default */
-:root {
-  color-scheme: dark;
-}
-
-/* Paleta do Figma (ajuste se quiser) */
+/* Paleta - alinhada ao print */
 :root {
   --bg:        18 18 18;   /* #121212 */
   --panel:     26 26 26;   /* #1A1A1A */
-  --panel-2:   30 30 30;
-  --stroke:    56 56 56;
-  --muted:     160 160 160;
-  --text:      230 230 230;
+  --panel-2:   32 32 32;   /* leve contraste */
+  --stroke:    64 64 64;   /* linhas/bordas */
+  --muted:     168 168 168;/* textos secundários */
+  --text:      234 234 234;/* texto principal */
 
-  --brand-a:   99 102 241;   /* indigo-500 */
-  --brand-b:   16 185 129;   /* emerald-500 */
-  --brand-c:   59 130 246;   /* blue-500 */
+  /* Acentos */
+  --brand:     234 88 12;  /* laranja-600 (#EA580C) - botões/links */
+  --accent:    16 185 129; /* verde-500 (#10B981) - badges "Financeira Manual" */
+  --warn:      245 158 11; /* amber-500 */
+  --good:      16 185 129; /* emerald-500 */
+  --bad:       239 68 68;  /* red-500 */
 
-  --warn:      245 158 11;   /* amber-500 */
-  --good:      16 185 129;   /* emerald-500 */
-  --bad:       239 68 68;    /* red-500 */
-
-  --pill-start: 255 99 132;  /* gradiente do logo/pílulas  */
-  --pill-end:   255 159 64;
+  /* Gradiente de pílulas (se usar) */
+  --pill-start: 234 88 12; /* laranja */
+  --pill-end:   245 158 11;/* amber */
 }
 
 html, body {
@@ -38,35 +35,33 @@ html, body {
 .card {
   @apply bg-[rgb(var(--panel))] rounded-2xl border border-[rgb(var(--stroke))]/40 shadow-[0_0_0_1px_rgba(255,255,255,0.02)];
 }
-.card-muted {
-  @apply bg-[rgb(var(--panel-2))];
-}
+.card-muted { @apply bg-[rgb(var(--panel-2))]; }
 
-/* Pílula com gradiente (logo/etiquetas) */
+/* Pílulas/badges */
 .pill {
   background: linear-gradient(135deg, rgb(var(--pill-start)) 0%, rgb(var(--pill-end)) 100%);
   @apply text-white rounded-full px-3 py-1 text-sm font-medium;
 }
 
-/* Badges */
-.badge {
-  @apply rounded-full px-2 py-0.5 text-xs border border-white/10;
-}
+.badge { @apply rounded-full px-2 py-0.5 text-xs border border-white/10; }
 .badge-good { @apply text-[rgb(var(--good))] border-[rgb(var(--good))]/20 bg-[rgb(var(--good))]/10; }
 .badge-warn { @apply text-[rgb(var(--warn))] border-[rgb(var(--warn))]/20 bg-[rgb(var(--warn))]/10; }
 .badge-bad  { @apply text-[rgb(var(--bad))]  border-[rgb(var(--bad))]/20  bg-[rgb(var(--bad))]/10; }
 .badge-soft { @apply text-[rgb(var(--muted))] border-[rgb(var(--stroke))]/40 bg-black/10; }
 
-/* Inputs “ghost” arredondados */
+/* Inputs ghost arredondados */
 .input-ghost {
-  @apply bg-[rgb(var(--panel-2))] border border-[rgb(var(--stroke))]/40 rounded-full px-4 h-10 text-sm placeholder:text-[rgb(var(--muted))] focus:outline-none focus:ring-2 focus:ring-white/10;
+  @apply bg-[rgb(var(--panel-2))] border border-[rgb(var(--stroke))]/40 rounded-full px-4 h-10 text-sm
+         placeholder:text-[rgb(var(--muted))] focus:outline-none focus:ring-2 focus:ring-white/10;
 }
 
-/* Botão principal arredondado */
+/* Botões */
 .btn {
   @apply rounded-full h-9 px-4 inline-flex items-center gap-2 border border-white/10 bg-white/5 hover:bg-white/10 transition;
 }
 .btn-primary {
-  background: linear-gradient(135deg, rgb(var(--brand-a)) 0%, rgb(var(--brand-c)) 100%);
+  background: linear-gradient(135deg, rgb(var(--brand)) 0%, rgba(255,255,255,0.06) 100%);
   @apply text-white border-0 hover:opacity-95;
 }
+a { @apply transition-colors; }
+a:hover { color: rgb(var(--brand)); }

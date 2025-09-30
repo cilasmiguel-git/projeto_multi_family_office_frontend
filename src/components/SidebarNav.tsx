@@ -14,6 +14,9 @@ import {
   Building2,
   Target,
   Wallet,
+  Shield,
+  ArrowLeftRight,
+  GitBranch,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
@@ -51,67 +54,48 @@ export default function SidebarNav() {
     ? `/clients/${activeId}/dashboard`
     : "/clients";
 
-  const items = useMemo<Item[]>(() => {
-    const base: Item[] = [
-      activeId
-        ? {
-            label: "Cliente",
-            icon: LineChart,
-            children: [
-              {
-                label: "Visão geral",
-                href: `/clients/${activeId}/dashboard`,
-                icon: LayoutDashboard,
-              },
-              {
-                label: "Projeções",
-                href: `/clients/${activeId}/projection`,
-                icon: LineChart,
-              },
-              {
-                label: "Simulações",
-                href: `/clients/${activeId}/simulations`,
-                icon: LayoutDashboard, // escolha o ícone
-              },
-              {
-                label: "Alocações",
-                href: `/clients/${activeId}/allocations`,
-                icon: Layers,
-              },
-              {
-                label: "Histórico",
-                href: `/clients/${activeId}/history`,
-                icon: History,
-              },
-            ],
-          }
-        : {
-            label: "Cliente",
-            icon: LineChart,
-            children: [],
-          },
-
-      {
-        label: "Clientes",
-        icon: Users,
-        children: [
-          { label: "Lista", href: "/clients", icon: Users },
-          { label: "Prospects", href: "/prospects", icon: UserPlus },
-        ],
-      },
-      {
-        label: "Operações",
-        icon: Layers,
-        children: [
-          { label: "Consolidação", href: "/consolidacao", icon: Layers },
-          { label: "CRM", href: "/crm", icon: Building2 },
-          { label: "Captação", href: "/captacao", icon: Target },
-          { label: "Financeiro", href: "/financeiro", icon: Wallet },
-        ],
-      },
+const items = useMemo<Item[]>(() => {
+  if (!activeId) {
+    return [
+      { label: "Cliente", icon: LineChart, children: [] },
     ];
-    return base;
-  }, [activeId, dashboardHref]);
+  }
+
+  return [
+    {
+      label: "Análises",
+      icon: LayoutDashboard,
+      children: [
+        { label: "Visão geral", href: `/clients/${activeId}/dashboard`, icon: LayoutDashboard },
+        { label: "Projeções",   href: `/clients/${activeId}/projection`, icon: LineChart },
+        { label: "Simulações",  href: `/clients/${activeId}/simulations`, icon: GitBranch  },
+      ],
+    },
+    {
+      label: "Gestão",
+      icon: Layers,
+      children: [
+        { label: "Alocações",     href: `/clients/${activeId}/allocations`, icon: Layers },
+        { label: "Movimentações", href: `/clients/${activeId}/movements`,   icon: ArrowLeftRight },
+      ],
+    },
+    {
+      label: "Segurança",
+      icon: Shield,
+      children: [
+        { label: "Seguros", href: `/clients/${activeId}/insurances`, icon: Shield },
+      ],
+    },
+    {
+      label: "Configuração",
+      icon: Users,
+      children: [
+        { label: "Clientes", href: "/clients", icon: Users },
+      ],
+    },
+  ];
+}, [activeId]);
+
 
   const [open, setOpen] = useState<Record<string, boolean>>({
     Clientes: true,
